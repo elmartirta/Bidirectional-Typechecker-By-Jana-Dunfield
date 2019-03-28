@@ -89,11 +89,9 @@ replaceVarWithExVarInType alpha alpha_hat a = case a of
     True -> ExType alpha_hat
     False -> UnivType beta
   ExType beta_hat -> ExType beta_hat
-  ForAll beta b -> undefined -- ForAll a (replaceVarWithExVarInType alpha alpha_hat b) 
-  -- If alpha == beta: Then don't change anything
-  -- Else: return Forall beta [replacement]B
-  -- ^  ForAll only accepts alpha as its first parameter, how do you replace 
-  -- alpha with alpha_hat in here? Is it legal to have a ForAll alpha_hat?
+  ForAll beta b -> case alpha == beta of 
+    True -> ForAll beta b
+    False -> ForAll beta (replaceVarWithExVarInType alpha alpha_hat b)
   Func a b -> Func (replaceVarWithExVarInType alpha alpha_hat a) (replaceVarWithExVarInType alpha alpha_hat b)
 
 -- Ruled by Figure 7
@@ -352,15 +350,26 @@ instantiateLeft :: Context -> ExVarName -> PolyType -> Maybe Context
 -- Figure 10 - Instantiate Left Solve 
 -- A: Try to apply Instantiate Left Solve first
 -- A: Apply Instantiate Left Solve to all kinds of Monotypes
-instantiateLeft ctx alpha_hat (UnivType tau) = undefined --case splitContextOn ctx (ExVar alpha_hat) of
-  -- (ctx_new, ctx_old) -> case ((isTypeWellFormed ctx (UnivType tau)) && (isMonotype (UnivType tau))) of  
-    -- False -> Nothing
-    -- True -> Just (ctx_new++(SolvedExVar alpha_hat (UnivType tau)):ctx_old)
-    
--- Figure 10 - Instantiate Left Reach
-instantiateLeft ctx alpha_hat (ExType beta_hat) = case splitContextOn ctx (ExVar beta_hat) of 
-  (ctx_new, ctx_old) -> case splitContextOn ctx (ExVar alpha_hat) of
-    (_, ctx_older) -> Just(ctx_new ++ (SolvedExVar beta_hat (ExType alpha_hat)):ctx_old ++ (ExVar alpha_hat):ctx_older)
+
+-- Figure 10 - Instantiate Left Solve - Unit Type
+instantiateLeft ctx alpha_hat (UnitType) =  case splitContextOn ctx (ExVar alpha_hat) of
+  (ctx_new, ctx_old) -> case ((isTypeWellFormed ctx_old (UnitType)) && (isMonoType (UnitType))) of  
+    False -> Nothing
+    True -> Just (ctx_new++(SolvedExVar alpha_hat (UnitType)):ctx_old)
+
+-- Figure 10 - Instantiate Left Solve - Univ Type
+instantiateLeft ctx alpha_hat (UnivType tau) = case splitContextOn ctx (ExVar alpha_hat) of
+  (ctx_new, ctx_old) -> case ((isTypeWellFormed ctx_old (UnivType tau)) && (isMonoType (UnivType tau))) of  
+    False -> Nothing
+    True -> Just (ctx_new++(SolvedExVar alpha_hat (UnivType tau)):ctx_old)
+  
+-- Figure 10 - Instantiate Left Solve -> Instantiate Left Reach - Exis Type
+instantiateLeft ctx alpha_hat (ExType beta_hat) = case splitContextOn ctx (ExVar alpha_hat) of
+  (ctx_new, ctx_old) -> case ((isTypeWellFormed ctx_old (ExType beta_hat)) && (isMonoType (ExType beta_hat))) of  
+    True -> Just (ctx_new++(SolvedExVar alpha_hat (ExType beta_hat)):ctx_old)
+    False -> case splitContextOn ctx (ExVar beta_hat) of 
+      (ctx_new, ctx_old) -> case splitContextOn ctx (ExVar alpha_hat) of
+        (_, ctx_older) -> Just(ctx_new ++ (SolvedExVar beta_hat (ExType alpha_hat)):ctx_old ++ (ExVar alpha_hat):ctx_older)
 
 -- Figure 10 - Instantiate Left Arr
 instantiateLeft ctx a_hat (Func a1 a2) = 
@@ -383,19 +392,14 @@ instantiateLeft ctx alpha_hat (ForAll beta b) = case lookupExVar ctx alpha_hat o
     Just out_ctx -> case splitContextOn out_ctx (UnivTypeElem beta) of
       (delta_prime, delta) -> Just delta
 
-
-
-instantiateLeft _ _ _ = Nothing
-
 instantiateRight :: Context -> PolyType -> ExVarName -> Maybe Context
 
--- Figure 10 - Instantiate Right Solve 
+-- Figure 10 - Instantiate Right Solve
+instantiateRight ctx (UnitType) alpha_hat = instantiateLeft ctx alpha_hat (UnitType)
 instantiateRight ctx (UnivType tau) alpha_hat = instantiateLeft ctx alpha_hat (UnivType tau)
-    
--- Figure 10 - Instantiate Right Reach
 instantiateRight ctx (ExType beta_hat) alpha_hat = instantiateLeft ctx alpha_hat (ExType beta_hat)
 
--- Figure 10 - 
+-- Figure 10 - Instantiate Right Arrow
 instantiateRight ctx (Func a1 a2) a_hat = 
   let a_hat_1 = novelAlphaHat (ctx) in
   let a_hat_2 = novelAlphaHat ((ExVar a_hat_1):ctx) in 
@@ -406,7 +410,8 @@ instantiateRight ctx (Func a1 a2) a_hat =
       Just theta -> case instantiateRight theta (applyContextToType theta a2) a_hat_2 of
         Nothing -> Nothing
         Just delta -> Just delta
-        
+
+-- Figure 10 - Instantiate Right A || L
 instantiateRight ctx (ForAll beta b) alpha_hat = case lookupExVar ctx alpha_hat of
   Nothing -> Nothing
   Just (SolvedExVar _ _ ) -> Nothing
@@ -415,7 +420,7 @@ instantiateRight ctx (ForAll beta b) alpha_hat = case lookupExVar ctx alpha_hat 
       Nothing -> Nothing
       Just (out_ctx) -> case splitContextOn out_ctx (Marker beta_hat) of
         (delta_prime, delta) -> Just (delta)
-instantiateRight _ _ _ = Nothing
+
 
 -- BASIC TEST CASES
 test1 = isContextWellFormed []
