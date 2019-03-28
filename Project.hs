@@ -19,7 +19,7 @@ data PolyType =
     UnitType                    -- | Unit Type            | 1              | 
   | UnivType UniVarName         -- | Universal TypeVars   | Alpha          | 
   | ExType ExVarName            -- | Existential TypeVars | Alpha-Hat      |
-  | ForAll UniVarName PolyType  -- | ForAll Type          | V.Alpha A      |  -- ??? Can ForAll use V.Alpha-hat?
+  | ForAll UniVarName PolyType  -- | ForAll Type          | V.Alpha A      |  
   | Func PolyType PolyType      -- | Arrow                | A -> B         |
   deriving (Show, Eq)
   
@@ -70,7 +70,8 @@ novelAlphaHat ctx = go ctx ctx 0
     | otherwise = go full_ctx working_ctx hat_num
   go full_ctx (_:working_ctx) hat_num = go full_ctx working_ctx hat_num
 
--- ??? How do you treat missing elements? Should probably just crash
+--  How do you treat missing elements? Should probably just crash
+-- A: Sure! Crashing is fun
 splitContextOn :: Context -> ContextElement -> (Context, Context)
 splitContextOn ctx elem = go elem ctx []
   where 
@@ -80,7 +81,7 @@ splitContextOn ctx elem = go elem ctx []
       | otherwise = go elem old (item:new_reversed)
 
 
--- ??? Is this how you represent [a_hat/a]A, in ForAll Application in Figure 11?
+-- Is this how you represent [a_hat/a]A, in ForAll Application in Figure 11? A: YEs
 replaceVarWithExVarInType :: UniVarName -> ExVarName -> PolyType -> PolyType
 replaceVarWithExVarInType alpha alpha_hat a = case a of
   UnitType -> UnitType
@@ -88,8 +89,10 @@ replaceVarWithExVarInType alpha alpha_hat a = case a of
     True -> ExType alpha_hat
     False -> UnivType beta
   ExType beta_hat -> ExType beta_hat
-  ForAll a b -> undefined -- ForAll a (replaceVarWithExVarInType alpha alpha_hat b) 
-  -- ^ ??? ForAll only accepts alpha as its first parameter, how do you replace 
+  ForAll beta b -> undefined -- ForAll a (replaceVarWithExVarInType alpha alpha_hat b) 
+  -- If alpha == beta: Then don't change anything
+  -- Else: return Forall beta [replacement]B
+  -- ^  ForAll only accepts alpha as its first parameter, how do you replace 
   -- alpha with alpha_hat in here? Is it legal to have a ForAll alpha_hat?
   Func a b -> Func (replaceVarWithExVarInType alpha alpha_hat a) (replaceVarWithExVarInType alpha alpha_hat b)
 
@@ -175,13 +178,17 @@ existInDom (_:ctx) (Marker alpha_hat) = existInDom ctx (Marker alpha_hat)
 
 inFreeVariables :: ExVarName -> PolyType -> Bool
 inFreeVariables alpha_hat UnitType = False
-inFreeVariables alpha_hat (UnivType a) = undefined
-inFreeVariables alpha_hat (ExType a) = undefined
-inFreeVariables alpha_hat (ForAll a) = undefined
-inFreeVariables alpha_hat (Func a b) = undefined
+inFreeVariables alpha_hat (UnivType alpha) = False
+inFreeVariables alpha_hat (ExType beta_hat) = (alpha_hat == beta_hat)
+inFreeVariables alpha_hat (ForAll alpha b) = inFreeVariables alpha_hat b
+inFreeVariables alpha_hat (Func a b) = inFreeVariables alpha_hat a || inFreeVariables alpha_hat b
 
-isMonotype :: PolyType -> Bool
-isMonotype _ = undefined -- ??? 
+isMonoType :: PolyType -> Bool
+isMonoType UnitType = True
+isMonoType (UnivType alpha) = True
+isMonoType (ExType beta_hat) = True
+isMonoType (ForAll alpha b) = False
+isMonoType (Func a b) = isMonoType a && isMonoType b
 
 -- Ruled by Figure 11
 check :: Context -> Expr -> PolyType -> Maybe (Bool, Context)
@@ -209,17 +216,20 @@ check ctx e (ExType b) =
 check ctx e (ForAll alpha a) = 
   case check ((UnivTypeElem alpha):ctx) e a of 
     Nothing -> Nothing
-    Just (_,_) -> undefined
+    Just (False, _) -> Nothing
+    Just (_,out_ctx) -> case splitContextOn out_ctx (UnivTypeElem alpha) of
+      (theta,delta) -> Just (True, delta)
+      
 
 -- Ruled by Figure 11 - Arrow Introduction
-check ctx (Lam x e) (Func a b) =
+check ctx (Lam x e) (Func a b) =  
   case check ((ProgVar x a):ctx) e b of 
   Nothing -> Nothing
   Just (False, _) -> Nothing
   Just (True, out_ctx) -> case splitContextOn out_ctx (ProgVar x a) of 
     (theta, delta) -> Just (True, delta)  
   
-check _ _ _ = undefined
+check _ _ _ = Nothing
 
 -- Ruled by Figure 11 - Unit Introduction
 synth :: Context -> Expr ->  Maybe(PolyType, Context)
@@ -229,7 +239,7 @@ synth ctx (Uni) = Just (UnitType, ctx)
 synth ctx (Var x) = 
   case lookupProgVar ctx x of
     Nothing -> Nothing
-    Just (ProgVar _ a) -> Just (a, ctx)
+    Just (ProgVar _ a) -> Just (applyContextToType ctx a, ctx)
       
 -- Ruled by Figure 11 - Annotation Introduction
 synth ctx (Ano e a) = case isTypeWellFormed ctx a of
@@ -282,7 +292,7 @@ apply ctx (Func a c) e = case check ctx e a of
   Just(False, _) -> Nothing
   Just(True, delta) -> Just(c, delta)
   
-apply _ _ _ = undefined
+apply _ _ _ = Nothing
 -- TODO: Replace these with case
 
 subType :: Context -> PolyType -> PolyType -> Maybe (Context)
@@ -335,20 +345,20 @@ subType ctx a (ExType alpha_hat) = case inFreeVariables alpha_hat a of
     Nothing -> Nothing
     Just delta -> Just delta
     
-subType _ _ _ = undefined
+subType _ _ _ = Nothing
 
 instantiateLeft :: Context -> ExVarName -> PolyType -> Maybe Context
 
 -- Figure 10 - Instantiate Left Solve 
-instantiateLeft ctx alpha_hat (UnivType tau) = case splitContextOn ctx (ExVar alpha_hat) of
-  (ctx_new, ctx_old) -> case ((isTypeWellFormed ctx (UnivType tau)) && (isMonotype (UnivType tau))) of  
-    -- ??? Mono-type troubles: How do you find out what is a Mono-type at this point?
-    False -> Nothing
-    True -> Just (ctx_new++(SolvedExVar alpha_hat (UnivType tau)):ctx_old)
+-- A: Try to apply Instantiate Left Solve first
+-- A: Apply Instantiate Left Solve to all kinds of Monotypes
+instantiateLeft ctx alpha_hat (UnivType tau) = undefined --case splitContextOn ctx (ExVar alpha_hat) of
+  -- (ctx_new, ctx_old) -> case ((isTypeWellFormed ctx (UnivType tau)) && (isMonotype (UnivType tau))) of  
+    -- False -> Nothing
+    -- True -> Just (ctx_new++(SolvedExVar alpha_hat (UnivType tau)):ctx_old)
     
 -- Figure 10 - Instantiate Left Reach
 instantiateLeft ctx alpha_hat (ExType beta_hat) = case splitContextOn ctx (ExVar beta_hat) of 
-  -- ??? Potential for error: Will Beta_hat and alpha_hat always exist in context?
   (ctx_new, ctx_old) -> case splitContextOn ctx (ExVar alpha_hat) of
     (_, ctx_older) -> Just(ctx_new ++ (SolvedExVar beta_hat (ExType alpha_hat)):ctx_old ++ (ExVar alpha_hat):ctx_older)
 
@@ -375,7 +385,7 @@ instantiateLeft ctx alpha_hat (ForAll beta b) = case lookupExVar ctx alpha_hat o
 
 
 
-instantiateLeft _ _ _ = undefined
+instantiateLeft _ _ _ = Nothing
 
 instantiateRight :: Context -> PolyType -> ExVarName -> Maybe Context
 
@@ -405,7 +415,7 @@ instantiateRight ctx (ForAll beta b) alpha_hat = case lookupExVar ctx alpha_hat 
       Nothing -> Nothing
       Just (out_ctx) -> case splitContextOn out_ctx (Marker beta_hat) of
         (delta_prime, delta) -> Just (delta)
-instantiateRight _ _ _ = undefined
+instantiateRight _ _ _ = Nothing
 
 -- BASIC TEST CASES
 test1 = isContextWellFormed []
@@ -417,11 +427,13 @@ test6 = isContextWellFormed [Marker (ExVarName "A^"), UnivTypeElem (UniVarName "
 test7 = undefined -- CREATE TEST WHERE ALPHA-HAT AND ALPHA-HAT IS DECLARED TWICE, solved and unsolved
 test8 = undefined -- Create a test where alpha-hat and alpha share same name, is ok
 -- GOOD CONTEXTS [ExVar "A^", ProgVar "x" TYPE]
--- ??? CONTEXTS  [ExVar "A^", ProgVar "A" TYPE] only okay if these are treated differently
+-- Mystery CONTEXTS  [ExVar "A^", ProgVar "A" TYPE] only okay if these are treated differently
 
 
 -- Contexts to test on [Marker (ExVarName "A"), UnivTypeElem "B", UnivTypeElem "A", SolvedExVar (ExVarName "B") UnitType, ProgVar "B" (UnitType)]
 printContext = undefined -- TODO 
+
+--
 
 
 
