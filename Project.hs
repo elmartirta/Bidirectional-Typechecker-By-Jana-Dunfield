@@ -1,8 +1,9 @@
 --IMPLEMENTATION OF THE ALGORITHMIC SYSTEM
 
--- TODO: Implement a different type, replacing String
 -- TODO: Try to find bugs, that confuse alpha and alpha-hat
 --       Or, implement a different data type, for alpha and alpha-hat
+
+debug = False
 
 newtype ExVarName = ExVarName String deriving(Show, Eq)
 newtype UniVarName = UniVarName String deriving(Show, Eq)
@@ -35,7 +36,7 @@ data ContextElement =
 -- Ruled by Substitution
 applyContextToType :: Context -> PolyType -> PolyType
 applyContextToType _ UnitType = UnitType 
-applyContextToType _ (UnivType a) = UnivType a
+applyContextToType _ (UnivType alpha) = UnivType alpha
 applyContextToType ctx (ExType a_hat) = case lookupExVar ctx a_hat of
   Just(SolvedExVar _ tau) -> applyContextToType ctx tau
   Just(ExVar a_hat) -> (ExType a_hat)
@@ -110,10 +111,6 @@ isContextWellFormed ((ExVar a_hat):ctx) = (not(existInDom ctx (ExVar a_hat))) &&
 isContextWellFormed ((SolvedExVar a t):ctx) = (not(existInDom ctx (SolvedExVar a t))) && (isTypeWellFormed ctx t) && (isContextWellFormed ctx) -- Solved Evar ctx
 isContextWellFormed ((ProgVar x a):ctx) = (not(existInDom ctx (ProgVar x a))) && (isContextWellFormed ctx) -- Var Ctx
 isContextWellFormed ((Marker a_hat):ctx) = (not(existInDom ctx (ExVar a_hat))) && (not(existInDom ctx (Marker a_hat))) && (isContextWellFormed ctx) -- Marker Ctx
-
-
-
--- TODO: Lookup for every kind of thing: ProgVar, and ExTypes
 
 lookupProgVar :: Context -> String -> Maybe ContextElement
 lookupProgVar [] name = Nothing
@@ -197,33 +194,33 @@ check ctx Uni (UnitType) = Just(True, ctx)
 -- Fig 11 - SubTyping
 check ctx e (UnivType b) = 
   case synth ctx e of 
-    Nothing -> Nothing
+    Nothing -> Just (False, ctx)
     Just(a, theta) -> case subType theta (applyContextToType theta a) (applyContextToType theta (UnivType b)) of
-      Nothing -> Nothing
+      Nothing -> Just (False, ctx)
       Just(delta) -> Just(True, delta)
 
 -- Fig 11 - SubTyping      
 check ctx e (ExType b) = 
   case synth ctx e of 
-    Nothing -> Nothing
+    Nothing -> Just (False, ctx)
     Just(a, theta) -> case subType theta (applyContextToType theta a) (applyContextToType theta (ExType b)) of
-      Nothing -> Nothing
+      Nothing -> Just (False, ctx)
       Just(delta) -> Just(True, delta)
       
 -- Ruled by Figure 11 - ForAll Introduction
 check ctx e (ForAll alpha a) = 
   case check ((UnivTypeElem alpha):ctx) e a of 
-    Nothing -> Nothing
-    Just (False, _) -> Nothing
+    Nothing -> Just (False, ctx)
+    Just (False, ctx) -> Just (False, ctx)
     Just (_,out_ctx) -> case splitContextOn out_ctx (UnivTypeElem alpha) of
       (theta,delta) -> Just (True, delta)
       
 
--- Ruled by Figure 11 - Arrow Introduction
+-- Ruled by Figure 11 - Arrow Introduction Check 
 check ctx (Lam x e) (Func a b) =  
   case check ((ProgVar x a):ctx) e b of 
-  Nothing -> Nothing
-  Just (False, _) -> Nothing
+  Nothing -> Just (False, ctx)
+  Just (False, ctx) -> Just (False, ctx)
   Just (True, out_ctx) -> case splitContextOn out_ctx (ProgVar x a) of 
     (theta, delta) -> Just (True, delta)  
   
@@ -236,32 +233,33 @@ synth ctx (Uni) = Just (UnitType, ctx)
 -- Ruled by Figure 11 - Var Introduction
 synth ctx (Var x) = 
   case lookupProgVar ctx x of
-    Nothing -> Nothing
+    Nothing -> if not debug then Nothing else error ("DEBUG: Synth Var Intro: lookupProgVar = Nothing")
     Just (ProgVar _ a) -> Just (applyContextToType ctx a, ctx)
       
 -- Ruled by Figure 11 - Annotation Introduction
 synth ctx (Ano e a) = case isTypeWellFormed ctx a of
-    False -> Nothing
+    False -> if not debug then Nothing else error ("DEBUG: Synth Anno Intro: Not well formed" )
     True -> case check ctx e a of
-      Nothing -> Nothing
-      Just(False, _) -> Nothing
+      Nothing -> if not debug then Nothing else error ("DEBUG: Synth Anno Intro: Check = Nothing" )
+      Just(False, _) -> if not debug then Nothing else error ("DEBUG: Synth Anno Intro: Check = False" )
       Just(True, delta) -> Just (a, delta)
 
--- Ruled by Fig 11 - Arrow Introduction
+-- Ruled by Fig 11 - Arrow Introduction Synthesis
 synth ctx (Lam x e) = 
   let alpha_hat = novelAlphaHat(ctx) in 
-  let beta_hat  = novelAlphaHat((ExVar alpha_hat):ctx) in 
-  case check ((ProgVar x (ExType alpha_hat)):(ExVar beta_hat):(ExVar alpha_hat):ctx) e (ExType beta_hat) of
+  let beta_hat = novelAlphaHat((ExVar alpha_hat):ctx) in
+  let x_ahat = ProgVar x (ExType alpha_hat) in
+  case check (x_ahat:(ExVar beta_hat):(ExVar alpha_hat):ctx) e (ExType beta_hat) of
     Nothing -> Nothing
     Just (False, _) -> Nothing
-    Just (True, out_ctx) -> case splitContextOn out_ctx (ProgVar x (ExType alpha_hat)) of
-      (theta, delta) -> Just (Func (ExType alpha_hat) (ExType beta_hat), delta)
+    Just (True, out_ctx) -> case splitContextOn out_ctx x_ahat of
+      (theta, delta) -> Just (Func (applyContextToType delta (ExType alpha_hat)) (applyContextToType delta (ExType beta_hat)), delta)
       
 -- Ruled by Fig 11 - Arrow Elimination
 synth ctx (App e1 e2) = case synth ctx e1 of 
-    Nothing -> Nothing 
+    Nothing -> if not debug then Nothing else error ("DEBUG: Synth Arrow Elim: Synth = Nothing|" ++ show e1 ) 
     Just(a, theta) -> case apply theta (applyContextToType theta a) e2 of
-      Nothing -> Nothing
+      Nothing -> if not debug then Nothing else error ("DEBUG: Synth Arrow Elim: Application = Nothing")
       Just (c, delta) -> Just (c, delta)
     
 -- Ruled by Figure 11
@@ -271,7 +269,7 @@ apply :: Context -> PolyType -> Expr -> Maybe (PolyType, Context)
 apply ctx (ForAll alpha a) e =
   let alpha_hat = novelAlphaHat ctx in 
   case apply (ExVar alpha_hat:ctx) (replaceVarWithExVarInType alpha alpha_hat a) e of
-    Nothing -> Nothing 
+    Nothing -> if not debug then Nothing else error ("DEBUG: Synth ForAll Application: Application Nothing" )
     Just (c, delta) -> Just (c, delta)
 
 -- Alpha Application
@@ -280,14 +278,14 @@ apply ctx (ExType a_hat) e =
   let a_hat_2 = novelAlphaHat ((ExVar a_hat_1):ctx) in 
   case splitContextOn ctx (ExVar a_hat) of
     (new, old) -> case check (new++(SolvedExVar a_hat (Func (ExType a_hat_1) (ExType a_hat_2)):(ExVar a_hat_1):(ExVar a_hat_2):old)) e (ExType a_hat_1) of 
-      Nothing -> Nothing
-      Just (False, _) -> Nothing
+      Nothing -> if not debug then Nothing else  error ("DEBUG: Alpha Application Nothing" )
+      Just (False, _) -> if not debug then Nothing else error ("DEBUG: Alpha Application Nothing - False" )
       Just (True, delta) -> Just(ExType a_hat_2, delta)
   
 -- Ruled by Figure 11 - Arrow Application
 apply ctx (Func a c) e = case check ctx e a of
-  Nothing -> Nothing
-  Just(False, _) -> Nothing
+  Nothing -> if not debug then Nothing else error ("DEBUG: Arrow Application Nothing" )
+  Just(False, _) -> if not debug then Nothing else error ("DEBUG: Arrow Application Nothing - False" )
   Just(True, delta) -> Just(c, delta)
   
 apply _ _ _ = Nothing
@@ -434,12 +432,30 @@ test8 = undefined -- Create a test where alpha-hat and alpha share same name, is
 -- GOOD CONTEXTS [ExVar "A^", ProgVar "x" TYPE]
 -- Mystery CONTEXTS  [ExVar "A^", ProgVar "A" TYPE] only okay if these are treated differently
 
+testExpr :: Int -> Expr
+testExpr 0 = Uni
+testExpr 1 = Var "A"
+testExpr 2 = Lam "X" Uni
+testExpr 3 = App Uni Uni
+testExpr 4 = Ano Uni UnitType
+testExpr 5 = App (Lam "X" Uni) (Uni)
+testExpr n = error ("There does not exist any expression of number" ++ show n)
+
+testContext :: Int -> Context
+testContext n = error ("There does not exist any context of number" ++ show n)
 
 -- Contexts to test on [Marker (ExVarName "A"), UnivTypeElem "B", UnivTypeElem "A", SolvedExVar (ExVarName "B") UnitType, ProgVar "B" (UnitType)]
-printContext = undefined -- TODO 
 
---
+-- Add J Dunfield to the github repository
 
+-- The output context should always be well-formed
+-- The output type should be well formed under the output context
+-- If you are checking, the input type should be well-formed in the input context
+-- The input context should be well-formed.
+
+-- Any valid input, should not cause the program to crash.
+-- Limitation: Interesting code, usually has variables in it.
+-- Create a type-correct program, and then randomly change it, mutation testing.
 
 
 
