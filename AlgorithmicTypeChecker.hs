@@ -1,10 +1,12 @@
+module AlgorithmicTypeChecker where
+
 --IMPLEMENTATION OF THE ALGORITHMIC SYSTEM
 
 -- TODO: Try to find bugs, that confuse alpha and alpha-hat
 --       Or, implement a different data type, for alpha and alpha-hat
 
-debug = False
-
+debug = True
+pretty_result = True
 newtype ExVarName = ExVarName String deriving(Show, Eq)
 newtype UniVarName = UniVarName String deriving(Show, Eq)
 
@@ -15,6 +17,8 @@ data Expr =
   | App Expr Expr      -- | Application | e e     | 
   | Ano Expr PolyType  -- | Annotation  | (e : a) |  
   deriving (Show, Eq)
+
+data Matrix a = Constructor1 Int a | Bool a 
 
 data PolyType = 
     UnitType                    -- | Unit Type            | 1              | 
@@ -190,23 +194,7 @@ check :: Context -> Expr -> PolyType -> Maybe (Bool, Context)
 
 -- Fig 11 - Unit Introduction
 check ctx Uni (UnitType) = Just(True, ctx)
-
--- Fig 11 - SubTyping
-check ctx e (UnivType b) = 
-  case synth ctx e of 
-    Nothing -> Just (False, ctx)
-    Just(a, theta) -> case subType theta (applyContextToType theta a) (applyContextToType theta (UnivType b)) of
-      Nothing -> Just (False, ctx)
-      Just(delta) -> Just(True, delta)
-
--- Fig 11 - SubTyping      
-check ctx e (ExType b) = 
-  case synth ctx e of 
-    Nothing -> Just (False, ctx)
-    Just(a, theta) -> case subType theta (applyContextToType theta a) (applyContextToType theta (ExType b)) of
-      Nothing -> Just (False, ctx)
-      Just(delta) -> Just(True, delta)
-      
+    
 -- Ruled by Figure 11 - ForAll Introduction
 check ctx e (ForAll alpha a) = 
   case check ((UnivTypeElem alpha):ctx) e a of 
@@ -223,9 +211,15 @@ check ctx (Lam x e) (Func a b) =
   Just (False, ctx) -> Just (False, ctx)
   Just (True, out_ctx) -> case splitContextOn out_ctx (ProgVar x a) of 
     (theta, delta) -> Just (True, delta)  
+    
+-- Fig 11 - SubTyping      
+check ctx e b = 
+  case synth ctx e of 
+    Nothing -> if not debug then Just(False, ctx) else error ("DEBUG: Check Sub: Synth "++(show ctx)++""++(show e)++" = Nothing")
+    Just(a, theta) -> case subType theta (applyContextToType theta a) (applyContextToType theta b) of
+      Nothing -> if not debug then Just(False, ctx) else error ("DEBUG: Check Sub: subType "++(show theta)++" "++(show (applyContextToType theta a))++" "++(show (applyContextToType theta b))++" = Nothing")
+      Just(delta) -> Just(True, delta)
   
-check _ _ _ = Nothing
-
 -- Ruled by Figure 11 - Unit Introduction
 synth :: Context -> Expr ->  Maybe(PolyType, Context)
 synth ctx (Uni) = Just (UnitType, ctx)
@@ -250,8 +244,8 @@ synth ctx (Lam x e) =
   let beta_hat = novelAlphaHat((ExVar alpha_hat):ctx) in
   let x_ahat = ProgVar x (ExType alpha_hat) in
   case check (x_ahat:(ExVar beta_hat):(ExVar alpha_hat):ctx) e (ExType beta_hat) of
-    Nothing -> Nothing
-    Just (False, _) -> Nothing
+    Nothing         -> if not debug then Nothing else error ("DEBUG: Synth Arrow Intro: check "++(show e)++" = Nothing")
+    Just (False, _) -> if not debug then Nothing else error ("DEBUG: Synth Arrow Intro: check "++(show e)++" "++(show (ExType beta_hat))++" = False")
     Just (True, out_ctx) -> case splitContextOn out_ctx x_ahat of
       (theta, delta) -> Just (Func (applyContextToType delta (ExType alpha_hat)) (applyContextToType delta (ExType beta_hat)), delta)
       
@@ -297,15 +291,29 @@ subType :: Context -> PolyType -> PolyType -> Maybe (Context)
 subType ctx UnitType UnitType = Just ctx
 
 -- Figure 9 - Var
-subType ctx (UnivType a) (UnivType b)
-  | (existInDom ctx (UnivTypeElem a)) && (a == b) = Just ctx
-  | otherwise = Nothing
+subType ctx (UnivType a) (UnivType b) = case a == b of
+  False -> if not debug then Nothing else error ("DEBUG: SubType Univ Type - Types "++(show a)++" and "++(show b)++" are not equal")
+  True  -> case (existInDom ctx (UnivTypeElem a)) of
+    False  -> if not debug then Nothing else error("DEBUG: SubType Univ Type - Types "++(show a)++" and "++(show b)++" do not exist in the domain of "++(show ctx))
+    True -> Just(ctx)
 
--- Figure 9 - ExVar
+-- Figure 9 - ExVar Equality and Instantiate Right
 subType ctx (ExType alpha_hat) (ExType beta_hat)
   | (existInDom ctx (ExVar alpha_hat)) && (alpha_hat == beta_hat) = Just ctx
-  | otherwise = Nothing 
-  
+  | otherwise = let b = (ExType beta_hat) in
+    case inFreeVariables alpha_hat b of 
+      True -> if not debug then Nothing else error ("DEBUG: SubType ExType ExType - Instantiate Right - alpha_hat in free variables of b")
+      False -> case instantiateRight ctx b alpha_hat of
+        Nothing -> if not debug then Nothing else error ("DEBUG: SubType ExType ExType - Instantiate Right "++(show ctx)++" "++(show b)++" "++(show alpha_hat)++" returns nothing")
+        Just delta -> Just delta 
+
+-- Figure 9 - Generic Instantiate Right 
+subType ctx a (ExType alpha_hat) = case inFreeVariables alpha_hat a of 
+  True -> Nothing
+  False -> case instantiateRight ctx a alpha_hat of
+    Nothing -> Nothing
+    Just delta -> Just delta
+
 -- Figure 9 - Func
 subType ctx (Func a1 a2) (Func b1 b2) = case subType ctx b1 a1 of
   Nothing -> Nothing
@@ -334,14 +342,9 @@ subType ctx (ExType alpha_hat) a = case inFreeVariables alpha_hat a of
     Nothing -> Nothing
     Just delta -> Just delta
 
--- Figure 9 - Instantiate Right 
-subType ctx a (ExType alpha_hat) = case inFreeVariables alpha_hat a of 
-  True -> Nothing
-  False -> case instantiateRight ctx a alpha_hat of
-    Nothing -> Nothing
-    Just delta -> Just delta
+
     
-subType _ _ _ = Nothing
+subType _ _ _ = if not debug then Nothing else error ("DEBUG: Subtype cannot find suitable rule: returning Nothing" )
 
 instantiateLeft :: Context -> ExVarName -> PolyType -> Maybe Context
 
@@ -361,13 +364,13 @@ instantiateLeft ctx alpha_hat (UnivType tau) = case splitContextOn ctx (ExVar al
     False -> Nothing
     True -> Just (ctx_new++(SolvedExVar alpha_hat (UnivType tau)):ctx_old)
   
--- Figure 10 - Instantiate Left Solve -> Instantiate Left Reach - Exis Type
+-- Figure 10 - Instantiate Left Solve -> Instantiate Left Reach - Exist Type
 instantiateLeft ctx alpha_hat (ExType beta_hat) = case splitContextOn ctx (ExVar alpha_hat) of
   (ctx_new, ctx_old) -> case ((isTypeWellFormed ctx_old (ExType beta_hat)) && (isMonoType (ExType beta_hat))) of  
     True -> Just (ctx_new++(SolvedExVar alpha_hat (ExType beta_hat)):ctx_old)
     False -> case splitContextOn ctx (ExVar beta_hat) of 
-      (ctx_new, ctx_old) -> case splitContextOn ctx (ExVar alpha_hat) of
-        (_, ctx_older) -> Just(ctx_new ++ (SolvedExVar beta_hat (ExType alpha_hat)):ctx_old ++ (ExVar alpha_hat):ctx_older)
+      (ctx_newest, ctx_middle) -> case splitContextOn ctx_middle (ExVar alpha_hat) of
+        (_, ctx_oldest) -> Just(ctx_newest++(SolvedExVar beta_hat (ExType alpha_hat)):ctx_middle)
 
 -- Figure 10 - Instantiate Left Arr
 instantiateLeft ctx a_hat (Func a1 a2) = 
@@ -420,42 +423,6 @@ instantiateRight ctx (ForAll beta b) alpha_hat = case lookupExVar ctx alpha_hat 
         (delta_prime, delta) -> Just (delta)
 
 
--- BASIC TEST CASES
-test1 = isContextWellFormed []
-test2 = undefined
-test3 = isContextWellFormed [UnivTypeElem (UniVarName "A")]
-test4 = not (isContextWellFormed [UnivTypeElem (UniVarName "A"), UnivTypeElem (UniVarName "A")])
-test5 = isContextWellFormed [Marker (ExVarName "A^")]
-test6 = isContextWellFormed [Marker (ExVarName "A^"), UnivTypeElem (UniVarName "A")]
-test7 = undefined -- CREATE TEST WHERE ALPHA-HAT AND ALPHA-HAT IS DECLARED TWICE, solved and unsolved
-test8 = undefined -- Create a test where alpha-hat and alpha share same name, is ok
--- GOOD CONTEXTS [ExVar "A^", ProgVar "x" TYPE]
--- Mystery CONTEXTS  [ExVar "A^", ProgVar "A" TYPE] only okay if these are treated differently
-
-testExpr :: Int -> Expr
-testExpr 0 = Uni
-testExpr 1 = Var "A"
-testExpr 2 = Lam "X" Uni
-testExpr 3 = App Uni Uni
-testExpr 4 = Ano Uni UnitType
-testExpr 5 = App (Lam "X" Uni) (Uni)
-testExpr n = error ("There does not exist any expression of number" ++ show n)
-
-testContext :: Int -> Context
-testContext n = error ("There does not exist any context of number" ++ show n)
-
--- Contexts to test on [Marker (ExVarName "A"), UnivTypeElem "B", UnivTypeElem "A", SolvedExVar (ExVarName "B") UnitType, ProgVar "B" (UnitType)]
-
--- Add J Dunfield to the github repository
-
--- The output context should always be well-formed
--- The output type should be well formed under the output context
--- If you are checking, the input type should be well-formed in the input context
--- The input context should be well-formed.
-
--- Any valid input, should not cause the program to crash.
--- Limitation: Interesting code, usually has variables in it.
--- Create a type-correct program, and then randomly change it, mutation testing.
 
 
 
